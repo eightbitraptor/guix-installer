@@ -1,86 +1,127 @@
 name: Build Guix Installer
 
 on:
-  push:
-    branches:
-      - master
-
-  schedule:
-    # build every week
-    - cron: "0 0 */7 * *"
-
-  # Allows you to run this workflow manually from the Actions tab
   workflow_dispatch:
+    inputs:
+      disable_substitutes:
+        description: 'No substitute-urls'
+        required: false
+        default: false
+        type: boolean
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 720
     steps:
+      - name: Clean-up the disk
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          sudo docker image prune --all --force
+          sudo docker builder prune -a
+          df -h
+
       - name: Git checkout
         uses: actions/checkout@v4
+
       - name: Guix cache
         uses: actions/cache/restore@v3
         with:
           path: ~/.cache/guix
-          # use a key that (almost) never matches
-          key: guix-cache-${{ github.sha }}
-          restore-keys: |
-            guix-cache-
+          key: guix-cache-${{ hashFiles('guix/channels.scm') }}
+          restore-keys: guix-cache-
+
+      - name: Set LANG
+        run: echo LANG=en_GB.utf8 >> $GITHUB_ENV
+
+      - name: Download Guix
+        run: curl -OL https://ftpmirror.gnu.org/gnu/guix/guix-binary-1.4.0.x86_64-linux.tar.xz
 
       - name: Install Guix
-        uses: PromyLOPh/guix-install-action@v1.5
-        with:
-          channels: |
-            (cons* (channel
-                     (name 'nonguix)
-                     (url "https://gitlab.com/nonguix/nonguix")
-                     (introduction
-                       (make-channel-introduction
-                         "897c1a470da759236cc11798f4e0a5f7d4d59fbc"
-                         (openpgp-fingerprint
-                           "2A39 3FFF 68F4 EF7A 3D29  12AF 6F51 20A0 22FB B2D5"))))
-                    %default-channels)
+        run: |
+          sudo tar --extract --file "guix-binary-1.4.0.x86_64-linux.tar.xz" -C / --no-overwrite-dir
+          sudo groupadd --system guixbuild
+
+          for i in $(seq -w 1 10); do
+            sudo useradd -g guixbuild -G guixbuild -d /var/empty -s "$(which nologin)" -c "Guix build user $i" --system "guixbuilder${i}"
+          done
+
+          export GUIX_PATH=/var/guix/profiles/per-user/root/current-guix
+
+          sudo cp $GUIX_PATH/lib/systemd/system/gnu-store.mount /etc/systemd/system/
+          sudo cp ./guix/guix-daemon.service /etc/systemd/system/
+          sudo chmod 664 /etc/systemd/system/{gnu-store.mount,guix-daemon.service}
+          sudo systemctl daemon-reload
+          sudo systemctl enable --now gnu-store.mount guix-daemon.service
+
+          echo "$GUIX_PATH/bin" >> $GITHUB_PATH
+
+      - name: Authorize build farm
+        if: ${{ !inputs.disable_substitutes }}
+        run: |
+          for F in /var/guix/profiles/per-user/root/current-guix/share/guix/*.pub; do
+            sudo /var/guix/profiles/per-user/root/current-guix/bin/guix archive --authorize < $F
+          done
+
+      - name: Generate signing keys
+        run: sudo /var/guix/profiles/per-user/root/current-guix/bin/guix archive --generate-key
+
+      - name: Update Guix
+        run: |
+          SUBSTITUTE_ARGS=""
+          if [ "${{ inputs.disable_substitutes }}" = "true" ]; then
+            SUBSTITUTE_ARGS="--no-substitutes"
+          else
+            SUBSTITUTE_ARGS="--substitute-urls=https://hydra-guix-129.guix.gnu.org https://bordeaux-singapore-mirror.cbaines.net"
+          fi
+          for attempt in 1 2 3; do
+            echo "Attempt $attempt of 3..."
+            if timeout 300 sudo /var/guix/profiles/per-user/root/current-guix/bin/guix pull --fallback $SUBSTITUTE_ARGS -C ./guix/channels.scm; then
+              echo "Guix update succeeded"
+              exit 0
+            fi
+            echo "Attempt $attempt failed"
+            [ $attempt -lt 3 ] && sleep 10
+          done
+          echo "All 3 attempts failed, skipping Guix update"
+          exit 0
 
       - name: Set up Nonguix Substitutes
-        run: |
-          # This is necessary to authorize the substitute server
-          wget https://substitutes.nonguix.org/signing-key.pub
-          mv signing-key.pub nonguix-signing-key.pub
-          sudo /var/guix/profiles/per-user/root/current-guix/bin/guix archive --authorize < nonguix-signing-key.pub
+        if: ${{ !inputs.disable_substitutes }}
+        run: sudo /var/guix/profiles/per-user/root/current-guix/bin/guix archive --authorize < ./keys/nonguix-signing-key.pub
 
-      - name: Set daemon level Substitutes
-        run: |
-          SUBSTITUTE_URLS="https://ci.guix.gnu.org https://bordeaux.guix.gnu.org https://substitutes.nonguix.org"
-          
-          sudo sed -i "s|--substitute-urls='https://bordeaux.guix.gnu.org https://ci.guix.gnu.org'|--substitute-urls='$SUBSTITUTE_URLS'|g" /etc/systemd/system/guix-daemon.service
-                
-          sudo systemctl daemon-reload
-          sudo systemctl restart guix-daemon.service    
-    
       - name: Build ISO
-        run: |
-          
-          # Write out the channels file so it can be included
-          guix time-machine -C ./guix/base-channels.scm -- describe -f channels > ./guix/channels.scm
-          
-          # Build the image
-          image=$(guix time-machine -C ./guix/channels.scm -- system image -t iso9660 ./guix/installer.scm)
+        run: ./build-iso.sh
+        env:
+          GUIX_NO_SUBSTITUTES: ${{ inputs.disable_substitutes }}
 
-          # Copy the image to the local folder with a better name
-          export RELEASE_TAG=$(date +"%Y%m%d%H%M")
-          echo "RELEASE_TAG=$RELEASE_TAG" >> $GITHUB_ENV
-          cp $image ./guix-installer-$RELEASE_TAG.iso
-      - uses: actions/cache/save@v3
+      - name: Save Guix cache
+        uses: actions/cache/save@v3
         if: always()
         with:
           path: ~/.cache/guix
-          key: guix-cache-${{ github.sha }}
+          key: guix-cache-${{ hashFiles('guix/channels.scm') }}
+
+      - name: Upload build logs
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: build-logs
+          path: /gnu/store/*.log
 
       - name: Prepare Release Notes
         run: |
-          echo $'This installer image was prepared with the following channel configuration:\r\n\r\n```\r\n' > release-notes.md
+          cat > release-notes.md << 'EOF'
+          This installer image was prepared with the following channel configuration:
+
+          ```
+          EOF
           cat ./guix/channels.scm >> release-notes.md
-          echo $'\r\n```' >> release-notes.md
+          echo '```' >> release-notes.md
 
       - name: Create Release
         uses: softprops/action-gh-release@v1
@@ -91,4 +132,3 @@ jobs:
           files: guix-installer-${{ env.RELEASE_TAG }}.iso
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITHUB_REPOSITORY: SystemCrafters/guix-installer

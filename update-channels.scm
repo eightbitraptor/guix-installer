@@ -1,0 +1,87 @@
+#!/usr/bin/env -S guile --no-auto-compile
+!#
+(use-modules (ice-9 popen)
+             (ice-9 rdelim)
+             (ice-9 pretty-print)
+             (srfi srfi-1))
+
+(define channels-file "./guix/base-channels.scm")
+(define guix-repo "https://codeberg.org/guix/guix.git")
+(define nonguix-repo "https://gitlab.com/nonguix/nonguix.git")
+
+(define (get-latest-commit repo-url branch)
+  (let* ((cmd (format #f "git ls-remote ~a refs/heads/~a" repo-url branch))
+         (port (open-input-pipe cmd))
+         (line (read-line port)))
+    (close-pipe port)
+    (if (eof-object? line)
+        (error "Failed to fetch commit from" repo-url)
+        (car (string-split line #\tab)))))
+
+(define (update-commit-in-channel sexp inherit-name new-commit)
+  (if (and (pair? sexp)
+           (eq? (car sexp) 'channels:channel))
+      (let ((has-inherit? (any (lambda (form)
+                                 (and (pair? form)
+                                      (eq? (car form) 'inherit)
+                                      (pair? (cdr form))
+                                      (eq? (cadr form) inherit-name)))
+                               (cdr sexp))))
+        (if has-inherit?
+            (cons 'channels:channel
+                  (map (lambda (form)
+                         (if (and (pair? form)
+                                  (eq? (car form) 'commit))
+                             (list 'commit new-commit)
+                             form))
+                       (cdr sexp)))
+            sexp))
+      sexp))
+
+(define (walk-and-update sexp guix-commit nonguix-commit)
+  (cond
+   ((not (pair? sexp)) sexp)
+   ((and (eq? (car sexp) 'channels:channel)
+         (any (lambda (f) (and (pair? f)
+                               (eq? (car f) 'inherit)
+                               (memq (cadr f) '(channels:%default-guix-channel nonguix-channel))))
+              (cdr sexp)))
+    (let* ((inherit-form (find (lambda (f) (and (pair? f) (eq? (car f) 'inherit))) (cdr sexp)))
+           (inherit-name (cadr inherit-form))
+           (new-commit (if (eq? inherit-name 'channels:%default-guix-channel)
+                           guix-commit
+                           nonguix-commit)))
+      (cons 'channels:channel
+            (map (lambda (form)
+                   (if (and (pair? form) (eq? (car form) 'commit))
+                       (list 'commit new-commit)
+                       form))
+                 (cdr sexp)))))
+   (else
+    (cons (walk-and-update (car sexp) guix-commit nonguix-commit)
+          (walk-and-update (cdr sexp) guix-commit nonguix-commit)))))
+
+(define (read-all-sexps port)
+  (let loop ((sexps '()))
+    (let ((sexp (read port)))
+      (if (eof-object? sexp)
+          (reverse sexps)
+          (loop (cons sexp sexps))))))
+
+(define (main)
+  (let ((guix-commit (get-latest-commit guix-repo "master"))
+        (nonguix-commit (get-latest-commit nonguix-repo "master")))
+    (format #t "Updating channels:~%")
+    (format #t "  guix:    ~a~%" guix-commit)
+    (format #t "  nonguix: ~a~%" nonguix-commit)
+    (let* ((sexps (call-with-input-file channels-file read-all-sexps))
+           (updated (map (lambda (s) (walk-and-update s guix-commit nonguix-commit)) sexps)))
+      (call-with-output-file channels-file
+        (lambda (port)
+          (for-each (lambda (sexp)
+                      (pretty-print sexp port)
+                      (newline port))
+                    updated))))
+    (format #t "Done.~%")))
+
+(main)

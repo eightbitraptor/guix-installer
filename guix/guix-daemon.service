@@ -1,0 +1,23 @@
+[Unit]
+Description=Build daemon for GNU Guix
+
+[Service]
+ExecStart=/var/guix/profiles/per-user/root/current-guix/bin/guix-daemon \
+    --build-users-group=guixbuild --discover=yes
+Environment='GUIX_LOCPATH=/var/guix/profiles/per-user/root/guix-profile/lib/locale' LC_ALL=en_US.utf8
+
+StandardOutput=syslog
+StandardError=syslog
+
+# Prevent systemd from killing the entire daemon tree if a child process
+# (like a compiler) gets OOM-killed.
+OOMPolicy=continue
+
+# Auto-restart on crash (rate-limited by systemd).
+Restart=always
+
+# Some package builds (e.g., Go) spawn many processes and need a higher limit.
+TasksMax=8192
+
+[Install]
+WantedBy=multi-user.target
