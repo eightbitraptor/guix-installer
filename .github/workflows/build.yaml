@@ -152,6 +152,18 @@ jobs:
       - name: Compress ISO
         run: xz -9 -T0 guix-installer-${{ env.RELEASE_TAG }}.iso
 
+      - name: Split ISO into parts
+        run: |
+          ISO_FILE="guix-installer-${{ env.RELEASE_TAG }}.iso.xz"
+          split -b 1800M "$ISO_FILE" "${ISO_FILE}.part."
+          sha256sum "$ISO_FILE" > "${ISO_FILE}.sha256"
+          sha256sum ${ISO_FILE}.part.* > "${ISO_FILE}.parts.sha256"
+
+      - name: Generate reconstruct script
+        run: |
+          sed -i 's/RELEASE_TAG="${1:-}"/RELEASE_TAG="${{ env.RELEASE_TAG }}"/' reconstruct-iso.sh
+          sed -i '/^if \[ -z "\$RELEASE_TAG" \]/,/^fi$/d' reconstruct-iso.sh
+
       - name: Prepare Release Notes
         run: |
           cat > release-notes.md << 'EOF'
@@ -168,6 +180,10 @@ jobs:
           name: Guix Installer - ${{ env.RELEASE_TAG }}
           tag_name: v${{ env.RELEASE_TAG }}
           body_path: release-notes.md
-          files: guix-installer-${{ env.RELEASE_TAG }}.iso.xz
+          files: |
+            guix-installer-${{ env.RELEASE_TAG }}.iso.xz.part.*
+            guix-installer-${{ env.RELEASE_TAG }}.iso.xz.sha256
+            guix-installer-${{ env.RELEASE_TAG }}.iso.xz.parts.sha256
+            reconstruct-iso.sh
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
