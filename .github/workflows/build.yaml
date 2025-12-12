@@ -149,6 +149,9 @@ jobs:
           name: build-logs
           path: /gnu/store/*.log
 
+      - name: Compress ISO
+        run: xz -9 -T0 guix-installer-${{ env.RELEASE_TAG }}.iso
+
       - name: Prepare Release Notes
         run: |
           cat > release-notes.md << 'EOF'
@@ -165,6 +168,6 @@ jobs:
           name: Guix Installer - ${{ env.RELEASE_TAG }}
           tag_name: v${{ env.RELEASE_TAG }}
           body_path: release-notes.md
-          files: guix-installer-${{ env.RELEASE_TAG }}.iso
+          files: guix-installer-${{ env.RELEASE_TAG }}.iso.xz
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
