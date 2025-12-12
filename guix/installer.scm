@@ -17,9 +17,6 @@
 ;;; You should have received a copy of the GNU General Public License
 ;;; along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-;; Generate a bootable image (e.g. for USB sticks, etc.) with:
-;; $ guix system image -t iso9660 installer.scm
-
 (define-module (nongnu system install)
   #:use-module (guix)
   #:use-module (guix channels)
@@ -34,10 +31,13 @@
   #:use-module (gnu services base)
   #:use-module (gnu system)
   #:use-module (gnu system install)
+  #:use-module (gnu system file-systems)
+  #:use-module (gnu image)
+  #:use-module (gnu system image)
   #:use-module (nongnu packages linux)
-  #:export (installation-os-nonfree))
+  #:export (installation-os-nonfree
+            installation-image-nonfree))
 
-;; https://substitutes.nonguix.org/signing-key.pub
 (define %signing-key
   (plain-file "nonguix.pub" "\
 (public-key
@@ -49,7 +49,6 @@
   (cons* (channel
           (name 'nonguix)
           (url "https://gitlab.com/nonguix/nonguix")
-          ;; Enable signature verification:
           (introduction
            (make-channel-introduction
             "897c1a470da759236cc11798f4e0a5f7d4d59fbc"
@@ -57,34 +56,53 @@
              "2A39 3FFF 68F4 EF7A 3D29  12AF 6F51 20A0 22FB B2D5"))))
          %default-channels))
 
+;; Root filesystem WITHOUT tmpfs /tmp - lets /tmp use the disk
+(define %disk-live-file-systems
+  (list (file-system
+          (mount-point "/")
+          (device (file-system-label "Guix_image"))
+          (type "ext4"))))
+
 (define installation-os-nonfree
   (operating-system
     (inherit installation-os)
     (kernel linux)
     (firmware (list linux-firmware))
 
+    ;; Use disk-backed /tmp instead of RAM-based tmpfs
+    (file-systems
+     (append %disk-live-file-systems
+             (list %pseudo-terminal-file-system
+                   %shared-memory-file-system
+                   %efivars-file-system
+                   %immutable-store)))
+
     (services
       (cons*
-        ;; Include the channel file so that it can be used during installation
         (simple-service 'channel-file etc-service-type
                         (list `("channels.scm" ,(local-file "channels.scm"))))
-
         (modify-services (operating-system-user-services installation-os)
-                         (guix-service-type
-                           config => (guix-configuration
-                                       (inherit config)
-                                       (guix (guix-for-channels %channels))
-                                       (authorized-keys
-                                         (cons* %signing-key
-                                                %default-authorized-guix-keys))
-                                       (substitute-urls
-                                         `(,@%default-substitute-urls
-                                            "https://substitutes.nonguix.org"))
-                                       (channels %channels))))))
+          (guix-service-type
+            config => (guix-configuration
+                        (inherit config)
+                        (guix (guix-for-channels %channels))
+                        (authorized-keys
+                          (cons* %signing-key
+                                 %default-authorized-guix-keys))
+                        (substitute-urls
+                          `(,@%default-substitute-urls
+                             "https://substitutes.nonguix.org"))
+                        (channels %channels))))))
 
-    ;; Add some extra packages useful for the installation process
     (packages
       (append (list git curl stow vim emacs-no-x-toolkit)
               (operating-system-packages installation-os)))))
 
-installation-os-nonfree
+;; 28 GiB EFI disk image - leaves room for dotfiles partition on 32GB stick
+(define installation-image-nonfree
+  (image
+   (inherit efi-disk-image)
+   (operating-system installation-os-nonfree)
+   (size (* 28 (expt 2 30)))))
+
+installation-image-nonfree
