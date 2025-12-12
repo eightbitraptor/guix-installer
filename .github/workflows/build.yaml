@@ -31,14 +31,13 @@ jobs:
           CANDIDATE_SERVERS=(
             "https://ci.guix.gnu.org"
             "https://bordeaux.guix.gnu.org"
-            "https://hydra-guix-129.guix.gnu.org"
             "https://bordeaux-singapore-mirror.cbaines.net"
           )
           AVAILABLE_SERVERS=""
 
           for server in "${CANDIDATE_SERVERS[@]}"; do
             echo "Checking $server..."
-            if curl --silent --fail --location --max-time 15 --output /dev/null "$server"; then
+            if curl --silent --fail --location --max-time 15 --output /dev/null "$server/nix-cache-info"; then
               echo "  OK: $server is available"
               if [ -n "$AVAILABLE_SERVERS" ]; then
                 AVAILABLE_SERVERS="$AVAILABLE_SERVERS $server"
