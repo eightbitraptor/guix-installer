@@ -90,22 +90,7 @@ jobs:
 
           sudo cp $GUIX_PATH/lib/systemd/system/gnu-store.mount /etc/systemd/system/
 
-          sudo tee /etc/systemd/system/guix-daemon.service > /dev/null <<EOF
-[Unit]
-Description=Build daemon for GNU Guix
-
-[Service]
-ExecStart=/var/guix/profiles/per-user/root/current-guix/bin/guix-daemon --build-users-group=guixbuild --discover=yes --substitute-urls="$GUIX_SUBSTITUTE_URLS"
-Environment='GUIX_LOCPATH=/var/guix/profiles/per-user/root/guix-profile/lib/locale' LC_ALL=en_US.utf8
-StandardOutput=syslog
-StandardError=syslog
-OOMPolicy=continue
-Restart=always
-TasksMax=8192
-
-[Install]
-WantedBy=multi-user.target
-EOF
+          sed "s|@@GUIX_SUBSTITUTE_URLS@@|$GUIX_SUBSTITUTE_URLS|g" guix-daemon.service.template | sudo tee /etc/systemd/system/guix-daemon.service > /dev/null
           sudo chmod 664 /etc/systemd/system/{gnu-store.mount,guix-daemon.service}
           sudo systemctl daemon-reload
           sudo systemctl enable --now gnu-store.mount guix-daemon.service

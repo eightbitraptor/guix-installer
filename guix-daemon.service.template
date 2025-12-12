@@ -1,0 +1,14 @@
+[Unit]
+Description=Build daemon for GNU Guix
+
+[Service]
+ExecStart=/var/guix/profiles/per-user/root/current-guix/bin/guix-daemon --build-users-group=guixbuild --discover=yes --substitute-urls="@@GUIX_SUBSTITUTE_URLS@@"
+Environment='GUIX_LOCPATH=/var/guix/profiles/per-user/root/guix-profile/lib/locale' LC_ALL=en_US.utf8
+StandardOutput=syslog
+StandardError=syslog
+OOMPolicy=continue
+Restart=always
+TasksMax=8192
+
+[Install]
+WantedBy=multi-user.target
