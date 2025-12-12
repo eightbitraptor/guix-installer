@@ -51,8 +51,12 @@ jobs:
           done
 
           export GUIX_PATH=/var/guix/profiles/per-user/root/current-guix
+          export GUIX_SUBSTITUTE_URLS="https://hydra-guix-129.guix.gnu.org https://bordeaux-singapore-mirror.cbaines.net"
 
           sudo cp $GUIX_PATH/lib/systemd/system/gnu-store.mount /etc/systemd/system/
+
+          cat ./guix/guix-daemon.service
+
           sudo cp ./guix/guix-daemon.service /etc/systemd/system/
           sudo chmod 664 /etc/systemd/system/{gnu-store.mount,guix-daemon.service}
           sudo systemctl daemon-reload
