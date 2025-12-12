@@ -55,9 +55,22 @@ jobs:
 
           sudo cp $GUIX_PATH/lib/systemd/system/gnu-store.mount /etc/systemd/system/
 
-          cat ./guix/guix-daemon.service
+          sudo tee /etc/systemd/system/guix-daemon.service > /dev/null << 'EOF'
+          [Unit]
+          Description=Build daemon for GNU Guix
 
-          sudo cp ./guix/guix-daemon.service /etc/systemd/system/
+          [Service]
+          ExecStart=/var/guix/profiles/per-user/root/current-guix/bin/guix-daemon --build-users-group=guixbuild --discover=yes --substitute-urls="https://hydra-guix-129.guix.gnu.org https://bordeaux-singapore-mirror.cbaines.net"
+          Environment='GUIX_LOCPATH=/var/guix/profiles/per-user/root/guix-profile/lib/locale' LC_ALL=en_US.utf8
+          StandardOutput=syslog
+          StandardError=syslog
+          OOMPolicy=continue
+          Restart=always
+          TasksMax=8192
+
+          [Install]
+          WantedBy=multi-user.target
+          EOF
           sudo chmod 664 /etc/systemd/system/{gnu-store.mount,guix-daemon.service}
           sudo systemctl daemon-reload
           sudo systemctl enable --now gnu-store.mount guix-daemon.service
