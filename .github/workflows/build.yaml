@@ -25,6 +25,42 @@ jobs:
           sudo docker builder prune -a
           df -h
 
+      - name: Check substitute server availability
+        id: check-substitutes
+        run: |
+          CANDIDATE_SERVERS=(
+            "https://ci.guix.gnu.org"
+            "https://bordeaux.guix.gnu.org"
+            "https://hydra-guix-129.guix.gnu.org"
+            "https://bordeaux-singapore-mirror.cbaines.net"
+          )
+          AVAILABLE_SERVERS=""
+
+          for server in "${CANDIDATE_SERVERS[@]}"; do
+            echo "Checking $server..."
+            if curl --silent --fail --location --max-time 15 --output /dev/null "$server"; then
+              echo "  OK: $server is available"
+              if [ -n "$AVAILABLE_SERVERS" ]; then
+                AVAILABLE_SERVERS="$AVAILABLE_SERVERS $server"
+              else
+                AVAILABLE_SERVERS="$server"
+              fi
+            else
+              echo "  FAIL: $server is not responding"
+            fi
+          done
+
+          # Always include nonguix substitute server
+          NONGUIX_SERVER="https://substitutes.nonguix.org"
+          if [ -n "$AVAILABLE_SERVERS" ]; then
+            AVAILABLE_SERVERS="$AVAILABLE_SERVERS $NONGUIX_SERVER"
+          else
+            AVAILABLE_SERVERS="$NONGUIX_SERVER"
+          fi
+
+          echo "Using substitute servers: $AVAILABLE_SERVERS"
+          echo "GUIX_SUBSTITUTE_URLS=$AVAILABLE_SERVERS" >> $GITHUB_ENV
+
       - name: Git checkout
         uses: actions/checkout@v4
 
@@ -50,27 +86,26 @@ jobs:
             sudo useradd -g guixbuild -G guixbuild -d /var/empty -s "$(which nologin)" -c "Guix build user $i" --system "guixbuilder${i}"
           done
 
-          export GUIX_PATH=/var/guix/profiles/per-user/root/current-guix
-          export GUIX_SUBSTITUTE_URLS="https://hydra-guix-129.guix.gnu.org https://bordeaux-singapore-mirror.cbaines.net"
+          GUIX_PATH=/var/guix/profiles/per-user/root/current-guix
 
           sudo cp $GUIX_PATH/lib/systemd/system/gnu-store.mount /etc/systemd/system/
 
-          sudo tee /etc/systemd/system/guix-daemon.service > /dev/null << 'EOF'
-          [Unit]
-          Description=Build daemon for GNU Guix
+          sudo tee /etc/systemd/system/guix-daemon.service > /dev/null <<EOF
+[Unit]
+Description=Build daemon for GNU Guix
 
-          [Service]
-          ExecStart=/var/guix/profiles/per-user/root/current-guix/bin/guix-daemon --build-users-group=guixbuild --discover=yes --substitute-urls="https://hydra-guix-129.guix.gnu.org https://bordeaux-singapore-mirror.cbaines.net"
-          Environment='GUIX_LOCPATH=/var/guix/profiles/per-user/root/guix-profile/lib/locale' LC_ALL=en_US.utf8
-          StandardOutput=syslog
-          StandardError=syslog
-          OOMPolicy=continue
-          Restart=always
-          TasksMax=8192
+[Service]
+ExecStart=/var/guix/profiles/per-user/root/current-guix/bin/guix-daemon --build-users-group=guixbuild --discover=yes --substitute-urls="$GUIX_SUBSTITUTE_URLS"
+Environment='GUIX_LOCPATH=/var/guix/profiles/per-user/root/guix-profile/lib/locale' LC_ALL=en_US.utf8
+StandardOutput=syslog
+StandardError=syslog
+OOMPolicy=continue
+Restart=always
+TasksMax=8192
 
-          [Install]
-          WantedBy=multi-user.target
-          EOF
+[Install]
+WantedBy=multi-user.target
+EOF
           sudo chmod 664 /etc/systemd/system/{gnu-store.mount,guix-daemon.service}
           sudo systemctl daemon-reload
           sudo systemctl enable --now gnu-store.mount guix-daemon.service
@@ -93,7 +128,7 @@ jobs:
           if [ "${{ inputs.disable_substitutes }}" = "true" ]; then
             SUBSTITUTE_ARGS="--no-substitutes"
           else
-            SUBSTITUTE_ARGS="--substitute-urls=https://hydra-guix-129.guix.gnu.org https://bordeaux-singapore-mirror.cbaines.net"
+            SUBSTITUTE_ARGS="--substitute-urls=$GUIX_SUBSTITUTE_URLS"
           fi
           for attempt in 1 2 3; do
             echo "Attempt $attempt of 3..."
