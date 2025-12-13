@@ -1,6 +1,8 @@
 name: Build Guix Installer
 
 on:
+  schedule:
+    - cron: '10 */4 * * *'
   workflow_dispatch:
     inputs:
       disable_substitutes:
